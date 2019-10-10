@@ -1,0 +1,241 @@
+%\documentclass[]{beamer}
+\documentclass[handout]{beamer}
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb,array,comment,eucal}
+\input{macros}
+\usepackage{verbatim}
+
+\usetheme{default}
+\title{Lab4: Fitting Bayesian Models in JAGS}
+\institute{}
+\author{STA721 Linear Models Duke University}
+\date{\today}
+
+
+\begin{document}
+\maketitle
+
+<<setup, echo=F>>=
+suppressMessages(library(R2jags))
+suppressMessages(library(ggplot2))
+suppressMessages(library(dplyr))
+set.seed(8675309)
+@
+
+\begin{frame}[t]
+  \frametitle{2 Block $g$-prior (Normal-Jeffreys)}
+
+
+Model in centered parameterization  (review)
+\begin{eqnarray*}
+\Y & = & \one \beta_0 + (\I_n - \P_1) \X_1 \b + \eps \\
+p(\beta_0, \phi) & \propto & 1/\phi\\
+\b \mid \beta_0, \phi, g  & \sim & \N(\zero, \frac{g}{\phi} (\X^T (\I_n - \P_{\one}) \X)^{-1})
+\end{eqnarray*}
+\pause
+
+Log Likelihood  (show)
+
+$${\cal{L}}(\beta_0, \beta_1, \phi) \propto
+\frac{n}{2}\log(\phi) - \frac{\phi}{2} \left(
+  n (\beta_0 - \ybar)^2
++ (\Y_c - \X_c \b)^T(\Y_c - \X_c)\right)$$
+
+Since
+$$\Y = (\I - \P_{\one})\Y  + \P_{\one}\Y$$
+
+\end{frame}
+
+\begin{frame}[t]
+  \frametitle{Bayesian Estimation with $g$ prior (2 groups}
+
+\begin{eqnarray*}
+\Y & = & \one \beta_0 + \I_n - \P_1) \X \b + \eps \\
+p(\beta_0, \phi) & \propto & 1\phi \\
+\b \mid \phi & \sim & \N(\zero, \frac{g}{\phi} (\X^T (\I_n - \P_{\one}) \X)^{-1})
+\end{eqnarray*}
+\end{frame}
+
+\end{frame}
+
+\begin{frame}\frametitle{Example from class: g=5, n=30}
+
+In SLR  $g$ prior contribution is like adding an extra $Y_0 = 0$ at $\X_o = \sqrt{\frac{\SS_x}{g}}$:
+
+\pause
+<<simdata, echo=F>>=
+set.seed(8675309)
+ X = rnorm(30, 0, 1)
+ Xc = X - mean(X)
+ Y = Xc* 3 + rnorm(30, 0, 1)
+ Yc = Y - mean(Y)
+ ols = lm(Yc ~ Xc -1)
+ SSX = sum(Xc^2)
+ g = 5
+
+ Xo = sqrt(SSX/g)
+ Xcomp = c(Xc, Xo)
+ Ycomp = c(Yc, 0)
+ bols = lm(Ycomp ~ Xcomp -1)
+@
+
+<<echo=F,fig.width=6, fig.height=4, out.height='2.5in'>>=
+df = data.frame(Yc = Yc, Xc=Xc)
+df = rbind(df, c(0, sqrt(SSX/g)))
+df$data = c(rep("obs", 30), "prior")
+coef.df = data.frame(slope = c(ols$coef, bols$coef),
+                     intercept=c(0,0))
+
+coef.df$prior = c("flat", "g-prior")
+ggplot(df, aes(y=Yc, x=Xc, shape=data)) +
+  geom_point() +
+  geom_abline(data=coef.df, aes(col=prior, linetype=prior,
+                                slope=slope,
+                                intercept=intercept)) +
+ # geom_point(aes(y=0, x= sqrt(SSX/g), col="prior data")) +
+  scale_color_manual(values=c("#999999", "#E69F00", "red"
+                              , "#56B4E9")) +
+theme_light()
+
+@
+
+\end{frame}
+
+
+
+
+
+
+
+\begin{frame}[t] \frametitle{Markov Chain Monte Carlo}
+\begin{itemize}
+\item We know that $\beta_0, \b, \phi \mid \Y, g=1/\tau$ has a Normal-Gamma distribution  \pause
+
+\item Derive full conditional for $\tb = [\beta_0, \b, \phi]$ as a sequence of distributions $\beta_0$ and $\b$ given $\phi, \Y$ (are independent) and $\phi \mid \Y$  [Successive Substitution Sampling]  (in HW)
+\item Let $\tau = 1/g$ have a Gamma distribution $G(1/b, n/2)$ We can show that $\tau \mid \beta_0,\b, \phi, \Y$ has a Gamma distribution (derive HW) \pause
+$$p(\tau \mid \b, \phi, \Y) \propto {\cal{L}}(\beta_0,\b, \phi)
+\tau^{p/2} e^{( - \tau \frac{\phi}{2} \b^T (\X^T\X) \b)}
+\tau^{1/2 - 1} e^{ - \tau n/2}$$ \pause
+\item alternate sampling from two blocks of full conditional distributions given current values of other parameters.  \pause
+\item implement in JAGS or STAN
+\end{itemize}
+\end{frame}
+
+
+\begin{frame}[fragile]{JAGS Code: library(R2jags)}
+<<>>=
+model = function(){
+  for (i in 1:n) {
+      Y[i] ~ dnorm(beta0+ (X[i] -Xbar)*beta, phi)
+  }
+  beta0 ~ dnorm(0, .000001*phi) #precision is 2nd arg
+  beta ~ dnorm(0, phi*tau*SSX)  #precision is 2nd arg
+  phi ~ dgamma(.001, .001) # approximate independent Jeffreys prior
+  tau ~ dgamma(.5, .5*n)
+  g <- 1/tau
+  sigma <- pow(phi, -.5)
+}
+data = list(Y=Y, X=X, n =length(Y), SSX=sum(Xc^2),
+            Xbar=mean(X))
+ZSout = jags(data, inits=NULL,
+             parameters.to.save=c("beta0","beta", "g",
+                                  "sigma"),
+             model=model, n.iter=10000)
+@
+\end{frame}
+
+\begin{frame}[fragile] \frametitle{HPD intervals}
+
+<<echo=F,gprior-old>>=
+ci = confint(lm(Y ~ Xc))
+ci[2,] = ci[2,]*5/(1 + 5)
+@
+
+<<>>=
+confint(lm(Y ~ Xc))
+HPDinterval(as.mcmc(ZSout$BUGSoutput$sims.matrix))
+@
+\end{frame}
+
+\begin{frame}[fragile] \frametitle{Compare}
+
+<<echo=F, out.height='2.5in', fig.width=6, fig.height=4>>=
+df = data.frame(Yc = Yc, Xc=Xc)
+df = rbind(df, c(0, sqrt(SSX/g)))
+df$data = c(rep("obs", 30), "prior")
+coef.df = data.frame(slope = c(ols$coef, bols$coef, ZSout$BUGSoutput$mean$beta),
+                     intercept=c(0,0,0))
+
+coef.df$prior = c("flat", "g-prior", "Cauchy")
+ggplot(df, aes(y=Yc, x=Xc, shape=data)) +
+  geom_point() +
+  geom_abline(data=coef.df, aes(col=prior, linetype=prior,
+                                slope=slope,
+                                intercept=intercept)) +
+ # geom_point(aes(y=0, x= sqrt(SSX/g), col="prior data")) +
+  scale_color_manual(values=c("#999999", "#E69F00", "red"
+                              , "#56B4E9")) +
+theme_light()
+
+@
+
+\end{frame}
+
+\begin{frame}[fragile]
+\begin{tiny}
+<<>>=
+ZSout
+@
+\end{tiny}
+\end{frame}
+
+\begin{frame}[fragile]\frametitle{Posterior Distribution of shrinkage}
+
+<<marginal, echo=FALSE, out.width='3in', out.height='3in', messages=FALSE, warning=FALSE>>=
+postdf = data.frame(ZSout$BUGSoutput$sims.matrix) %>%
+         mutate(shrinkage = g/(1+g))
+lp = ggplot(postdf, aes(x=shrinkage, y=..density..)) +
+           geom_histogram(bins=25) + geom_density() +
+           theme_light()
+lp
+@
+
+
+\end{frame}
+
+\begin{frame}[fragile] \frametitle{Joint Distribution of $\sigma$ and $g/(1 + g)$}
+
+<<out.width='2in',out.height='2in'>>=
+ggplot(postdf, aes(x=sigma, y=shrinkage) ) +
+ stat_density_2d(aes(fill = ..level..),
+                 geom = "polygon", colour="white") +
+  theme_light()
+
+@
+
+
+\end{frame}
+
+\begin{frame}\frametitle{Cauchy Summary}
+\begin{itemize}
+\item Cauchy rejects prior mean if it is an "outlier"
+\item robustness related to "bounded" influence (more later)
+\item requires numerical integration or Monte Carlo sampling (MCMC)
+\end{itemize}
+\end{frame}
+
+
+\end{document}
+
+
+
+
+
+
+
+
+
+
+
+\end{document}
+
